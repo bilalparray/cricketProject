@@ -13,31 +13,6 @@ const cors = require("cors");
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI);
 
-// Schema and Model
-// const playerSchema = new mongoose.Schema({
-//   name: String,
-//   role: String,
-//   born: Date,
-//   birthplace: String,
-//   battingstyle: String,
-//   bowlingstyle: String,
-//   debut: Date,
-//   image: String,
-//   scores: {
-//     runs: [String],
-//     balls: [String],
-//     wickets: [String],
-//     lastfour: [String],
-//     innings: [String],
-//     career: {
-//       balls: [String],
-//       runs: [String],
-//       wickets: [String],
-//       innings: [String],
-//     },
-//   },
-// });
-
 const playerSchema = new mongoose.Schema({
   name: String,
   role: String,
@@ -67,31 +42,25 @@ const playerSchema = new mongoose.Schema({
       },
     ],
     lastfour: [String],
-    innings: [
-      {
-        value: String,
-        DateOfMatch: Date,
-      },
-    ],
     career: {
       balls: [
         {
-          value: String
+          value: String,
         },
       ],
       runs: [
         {
-          value: String
+          value: String,
         },
       ],
       wickets: [
         {
-          value: String
+          value: String,
         },
       ],
-      innings: [
+      ranking: [
         {
-          value: String
+          value: Number,
         },
       ],
     },
@@ -158,6 +127,9 @@ const compressImage = async (imageBuffer) => {
     return null; // Return null if there's an error with image processing
   }
 };
+
+// Get All
+
 app.get("/api/players", async (req, res) => {
   try {
     const players = await Player.find(
@@ -176,9 +148,30 @@ app.get("/api/players", async (req, res) => {
       }
     );
 
+    // Calculate average runs for each player
+    const playersWithAverages = players.map(player => {
+      const totalMatches = player.scores.runs.length;
+      const totalRuns = player.scores.runs.reduce((acc, score) => acc + parseInt(score.value, 10), 0);
+      const averageRuns = totalMatches > 0 ? totalRuns / totalMatches : 0;
+
+      return {
+        player,
+        averageRuns
+      };
+    });
+
+    // Sort players based on average runs in descending order
+    playersWithAverages.sort((a, b) => b.averageRuns - a.averageRuns);
+
+    // Assign rankings based on sorted position
+    for (let i = 0; i < playersWithAverages.length; i++) {
+      playersWithAverages[i].player.scores.career.ranking[0].value = i + 1;
+      await playersWithAverages[i].player.save();
+    }
+
     // Map players and compress image if available
     const playersWithCompressedImages = await Promise.all(
-      players.map(async (player) => {
+      playersWithAverages.map(async ({ player }) => {
         if (player.image) {
           const compressedImage = await compressImage(
             Buffer.from(player.image, "base64")
@@ -227,58 +220,7 @@ app.put("/api/data/:playerId", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
-
-
-// app.post("/api/data", async (req, res) => {
-//   try {
-//     const {
-//       name,
-//       role,
-//       born,
-//       birthplace,
-//       battingstyle,
-//       bowlingstyle,
-//       debut,
-//       image,
-//       scores
-//     } = req.body;
-    
-//     // Create new player with scores included
-//     const newPlayer = new Player({
-//       name: name,
-//       role: role,
-//       born: born,
-//       birthplace: birthplace,
-//       battingstyle: battingstyle,
-//       bowlingstyle: bowlingstyle,
-//       debut: debut,
-//       image: image,
-//       scores: scores || {
-//         runs: [],
-//         balls: [],
-//         wickets: [],
-//         lastfour: [],
-//         innings: [],
-//         career: {
-//           balls: [],
-//           runs: [],
-//           wickets: [],
-//           innings: []
-//         },
-//       }
-//     });
-
-//     // Save the new player
-//     await newPlayer.save();
-
-//     res.status(200).json({ message: "Player added successfully" });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ message: "Internal server error" });
-//   }
-// });
-
-
+//Create new Player
 app.post("/api/data", async (req, res) => {
   try {
     const {
@@ -292,6 +234,11 @@ app.post("/api/data", async (req, res) => {
       image,
       scores
     } = req.body;
+
+    // Calculate total values for career stats
+    const totalBalls = scores.balls.reduce((sum, score) => sum + parseInt(score.value, 10), 0).toString();
+    const totalRuns = scores.runs.reduce((sum, score) => sum + parseInt(score.value, 10), 0).toString();
+    const totalWickets = scores.wickets.reduce((sum, score) => sum + parseInt(score.value, 10), 0).toString();
 
     // Create new player
     const newPlayer = new Player({
@@ -317,15 +264,11 @@ app.post("/api/data", async (req, res) => {
           DateOfMatch: new Date(score.DateOfMatch)
         })),
         lastfour: scores.lastfour,
-        innings: scores.innings.map(score => ({
-          value: score.value,
-          DateOfMatch: new Date(score.DateOfMatch)
-        })),
         career: {
-          balls: [{ value: "0" }], // Initial career values, adjust as needed
-          runs: [{ value: "0" }],
-          wickets: [{ value: "0" }],
-          innings: [{ value: "0" }]
+          balls: [{ value: totalBalls }], // Total score.balls.value
+          runs: [{ value: totalRuns }], // Total score.runs.value
+          wickets: [{ value: totalWickets }], // Total score.wickets.value
+          ranking: [{ value: 0 }] // Initially 0
         }
       }
     });
@@ -339,6 +282,7 @@ app.post("/api/data", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 //Delete All
 app.delete("/api/data/all", async (req, res) => {
   try {
@@ -394,91 +338,6 @@ app.put('/api/players/image/:id', async (req, res) => {
   }
 });
 
-// Update score card
-// app.put("/api/scorecard/:playerId", async (req, res) => {
-//   const playerId = req.params.playerId;
-//   const { scores } = req.body;
-
-//   try {
-//     let player = await Player.findById(playerId);
-
-//     if (!player) {
-//       return res.status(404).json({ message: "Player not found" });
-//     }
-
-//     // Update runs, balls, and wickets arrays if they exist in the request body
-//     if (scores.runs && scores.runs.length > 0) {
-//       scores.runs.forEach(score => {
-//         player.scores.runs.push({
-//           value: score.value,
-//           DateOfMatch: score.DateOfMatch
-//         });
-//       });
-//       updateCareerRuns(player); // Update career runs after pushing new runs
-//       updateLastFour(player, scores.runs); // Update last four runs
-//     }
-
-//     if (scores.balls && scores.balls.length > 0) {
-//       scores.balls.forEach(score => {
-//         player.scores.balls.push({
-//           value: score.value,
-//           DateOfMatch: score.DateOfMatch
-//         });
-//       });
-//       updateCareerBalls(player); // Update career balls after pushing new balls
-//     }
-
-//     if (scores.wickets && scores.wickets.length > 0) {
-//       scores.wickets.forEach(score => {
-//         player.scores.wickets.push({
-//           value: score.value,
-//           DateOfMatch: score.DateOfMatch
-//         });
-//       });
-//       updateCareerWickets(player); // Update career wickets after pushing new wickets
-//     }
-
-//     await player.save(); // Save the updated player document
-
-//     res.status(200).json({ message: "Scores updated successfully", player });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ message: "Internal server error" });
-//   }
-// });
-
-// // Function to update career runs
-// function updateCareerRuns(player) {
-//   player.scores.career.runs.value = player.scores.runs.reduce((total, run) => total + parseInt(run.value), 0).toString();
-// }
-
-// // Function to update career balls
-// function updateCareerBalls(player) {
-//   player.scores.career.balls.value = player.scores.balls.reduce((total, ball) => total + parseInt(ball.value), 0).toString();
-// }
-
-// // Function to update career wickets
-// function updateCareerWickets(player) {
-//   player.scores.career.wickets.value = player.scores.wickets.reduce((total, wicket) => total + parseInt(wicket.value), 0).toString();
-// }
-
-// // Function to update last four runs
-// function updateLastFour(player, newRuns) {
-//   const currentLastFour = player.scores.lastfour;
-
-//   if (currentLastFour.length >= 4) {
-//     // Remove oldest entry
-//     currentLastFour.shift();
-//   }
-
-//   // Add new runs value to last four
-//   const runsSum = newRuns.reduce((total, run) => total + parseInt(run.value), 0);
-//   currentLastFour.push(runsSum.toString());
-
-//   player.scores.lastfour = currentLastFour;
-// }
-
-//Update scores endpoint
 app.put('/api/scorecard/:playerId', async (req, res) => {
   const playerId = req.params.playerId;
   const { scores } = req.body;
@@ -489,12 +348,12 @@ app.put('/api/scorecard/:playerId', async (req, res) => {
     if (!player) {
       return res.status(404).json({ message: 'Player not found' });
     }
-
+    const dateOfMatch = new Date(scores.dateOfMatch);
     if (scores.runs && scores.runs.length > 0) {
       scores.runs.forEach(score => {
         player.scores.runs.push({
           value: score.value,
-          DateOfMatch: score.DateOfMatch,
+          DateOfMatch: dateOfMatch,
         });
       });
       updateCareerRuns(player);
@@ -506,7 +365,7 @@ app.put('/api/scorecard/:playerId', async (req, res) => {
       scores.balls.forEach(score => {
         player.scores.balls.push({
           value: score.value,
-          DateOfMatch: score.DateOfMatch,
+          DateOfMatch: dateOfMatch,
         });
       });
       updateCareerBalls(player);
@@ -517,7 +376,7 @@ app.put('/api/scorecard/:playerId', async (req, res) => {
       scores.wickets.forEach(score => {
         player.scores.wickets.push({
           value: score.value,
-          DateOfMatch: score.DateOfMatch,
+          DateOfMatch: dateOfMatch,
         });
       });
       updateCareerWickets(player);
