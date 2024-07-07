@@ -641,6 +641,38 @@ app.get('/api/mom/:date', async (req, res) => {
   }
 });
 
+//Ranking
+
+app.get("/api/rankings", async (req, res) => {
+  try {
+    // Fetch all players from the database
+    const players = await Player.find();
+
+    // Calculate average runs for each player
+    const playerRankings = players.map(player => {
+      const totalRuns = parseInt(player.scores.career.runs.value);
+      const totalMatches = player.scores.runs.length;
+      const averageRuns = totalMatches ? totalRuns / totalMatches : 0;
+
+      return {
+        playerId: player._id,
+        name: player.name,
+        totalRuns,
+        totalMatches,
+        averageRuns
+      };
+    });
+
+    // Sort players by average runs in descending order
+    playerRankings.sort((a, b) => b.averageRuns - a.averageRuns);
+
+    res.status(200).json(playerRankings);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 ///update player details
 app.put("/api/update/:playerId", async (req, res) => {
   try {
