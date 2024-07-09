@@ -13,6 +13,61 @@ const cors = require("cors");
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI);
 
+// const playerSchema = new mongoose.Schema({
+//   name: String,
+//   role: String,
+//   born: Date,
+//   birthplace: String,
+//   battingstyle: String,
+//   bowlingstyle: String,
+//   debut: Date,
+//   image: String,
+//   scores: {
+//     runs: [
+//       {
+//         value: String,
+//         DateOfMatch: Date,
+//       },
+//     ],
+//     balls: [
+//       {
+//         value: String,
+//         DateOfMatch: Date,
+//       },
+//     ],
+//     wickets: [
+//       {
+//         value: String,
+//         DateOfMatch: Date,
+//       },
+//     ],
+//     lastfour: [String],
+//     career: {
+//       balls: [
+//         {
+//           value: String,
+//         },
+//       ],
+//       runs: [
+//         {
+//           value: String,
+//         },
+//       ],
+//       wickets: [
+//         {
+//           value: String,
+//         },
+//       ],
+//       ranking: [
+//         {
+//           value: Number,
+//           Dated: Date
+//         },
+//       ],
+//     },
+//   },
+// });
+
 const playerSchema = new mongoose.Schema({
   name: String,
   role: String,
@@ -61,8 +116,12 @@ const playerSchema = new mongoose.Schema({
       ranking: [
         {
           value: Number,
+          Dated: Date,
         },
       ],
+      currentRanking: {
+        value: Number,
+      },
     },
   },
 });
@@ -130,6 +189,66 @@ const compressImage = async (imageBuffer) => {
 
 // Get All
 
+// app.get("/api/players", async (req, res) => {
+//   try {
+//     const players = await Player.find(
+//       {},
+//       {
+//         _id: 1,
+//         name: 1,
+//         birthplace: 1,
+//         born: 1,
+//         role: 1,
+//         battingstyle: 1,
+//         bowlingstyle: 1,
+//         debut: 1,
+//         image: 1,
+//         scores: 1,
+//       }
+//     );
+
+//     // Calculate average runs for each player
+//     const playersWithAverages = players.map(player => {
+//       const totalMatches = player.scores.runs.length;
+//       const totalRuns = player.scores.runs.reduce((acc, score) => acc + parseInt(score.value, 10), 0);
+//       const averageRuns = totalMatches > 0 ? totalRuns / totalMatches : 0;
+
+//       return {
+//         player,
+//         averageRuns
+//       };
+//     });
+
+//     // Sort players based on average runs in descending order
+//     playersWithAverages.sort((a, b) => b.averageRuns - a.averageRuns);
+
+//     // Assign rankings based on sorted position
+//     for (let i = 0; i < playersWithAverages.length; i++) {
+//       playersWithAverages[i].player.scores.career.ranking[0].value = i + 1;
+//       await playersWithAverages[i].player.save();
+//     }
+
+//     // Map players and compress image if available
+//     const playersWithCompressedImages = await Promise.all(
+//       playersWithAverages.map(async ({ player }) => {
+//         if (player.image) {
+//           const compressedImage = await compressImage(
+//             Buffer.from(player.image, "base64")
+//           );
+//           return { ...player.toObject(), image: compressedImage };
+//         } else {
+//           return { ...player.toObject(), image: null }; // Handle case where image is null or empty
+//         }
+//       })
+//     );
+
+//     res.status(200).json(playersWithCompressedImages);
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ message: "Internal server error" });
+//   }
+// });
+
 app.get("/api/players", async (req, res) => {
   try {
     const players = await Player.find(
@@ -163,10 +282,35 @@ app.get("/api/players", async (req, res) => {
     // Sort players based on average runs in descending order
     playersWithAverages.sort((a, b) => b.averageRuns - a.averageRuns);
 
-    // Assign rankings based on sorted position
+    // Assign rankings based on sorted position and update currentRanking
     for (let i = 0; i < playersWithAverages.length; i++) {
-      playersWithAverages[i].player.scores.career.ranking[0].value = i + 1;
-      await playersWithAverages[i].player.save();
+      const player = playersWithAverages[i].player;
+      const rankingValue = i + 1;
+
+      // Iterate through scores.runs to update rankings based on DateOfMatch
+      for (const run of player.scores.runs) {
+        const runDate = run.DateOfMatch;
+        if (runDate) {
+          const existingRanking = player.scores.career.ranking.find(r => r.Dated && r.Dated.toISOString() === runDate.toISOString());
+
+          if (!existingRanking) {
+            player.scores.career.ranking.push({
+              value: rankingValue,
+              Dated: runDate,
+            });
+          }
+        }
+      }
+
+      // Sort rankings by date
+      player.scores.career.ranking.sort((a, b) => new Date(b.Dated) - new Date(a.Dated));
+
+      // Update currentRanking with the latest ranking based on date
+      if (player.scores.career.ranking.length > 0) {
+        player.scores.career.currentRanking.value = player.scores.career.ranking[0].value;
+      }
+
+      await player.save();
     }
 
     // Map players and compress image if available
@@ -189,7 +333,59 @@ app.get("/api/players", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+//Get HomePage Data
+app.get("/api/homePageData", async (req, res) => {
+  try {
+    const players = await Player.find(
+      {},
+      {
+        _id: 1,
+        name: 1,
+        role: 1,
+        image: 1,
+        'scores.career.currentRanking': 1,
+      }
+    );
 
+    // Sort players based on currentRanking
+    players.sort((a, b) => a.scores.career.currentRanking.value - b.scores.career.currentRanking.value);
+
+    // Map players and compress image if available
+    const playersWithCompressedImages = await Promise.all(
+      players.map(async (player) => {
+        if (player.image) {
+          const compressedImage = await compressImage(
+            Buffer.from(player.image, "base64")
+          );
+          return {
+            _id: player._id,
+            name: player.name,
+            role: player.role,
+            image: compressedImage,
+            currentRanking: player.scores.career.currentRanking.value,
+          };
+        } else {
+          return {
+            _id: player._id,
+            name: player.name,
+            role: player.role,
+            image: null, // Handle case where image is null or empty
+            currentRanking: player.scores.career.currentRanking.value,
+          };
+        }
+      })
+    );
+
+    res.status(200).json(playersWithCompressedImages);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+
+
+//Update Player Data
 app.put("/api/data/:playerId", async (req, res) => {
   try {
     const playerId = req.params.playerId;
@@ -409,24 +605,7 @@ function updateCareerWickets(player) {
   const totalWickets = player.scores.wickets.reduce((total, wicket) => total + parseInt(wicket.value), 0);
   player.scores.career.wickets[0].value = totalWickets.toString();
 }
-
-// Function to update last four runs
-// function updateLastFour(player, newRuns) {
-//   const currentLastFour = player.scores.lastfour;
-
-//   if (currentLastFour.length >= 4) {
-//     //currentLastFour.shift(); // Remove oldest entry
-//     player.scores.lastfour = [];
-//     player.scores.lastfour.push(newRuns);
-//   }else{
-//     player.scores.lastfour.push(newRuns);
-//   }
-
-//   // const runsSum = newRuns.reduce((total, run) => total + parseInt(run.value), 0);
-//   // currentLastFour.push(runsSum.toString());
-
-//   player.scores.lastfour = currentLastFour;
-// }
+// Update last 4 Innings
 
 function updateLastFour(player, newRuns) {
   const currentLastFour = player.scores.lastfour;
