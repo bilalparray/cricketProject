@@ -13,61 +13,6 @@ const cors = require("cors");
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI);
 
-// const playerSchema = new mongoose.Schema({
-//   name: String,
-//   role: String,
-//   born: Date,
-//   birthplace: String,
-//   battingstyle: String,
-//   bowlingstyle: String,
-//   debut: Date,
-//   image: String,
-//   scores: {
-//     runs: [
-//       {
-//         value: String,
-//         DateOfMatch: Date,
-//       },
-//     ],
-//     balls: [
-//       {
-//         value: String,
-//         DateOfMatch: Date,
-//       },
-//     ],
-//     wickets: [
-//       {
-//         value: String,
-//         DateOfMatch: Date,
-//       },
-//     ],
-//     lastfour: [String],
-//     career: {
-//       balls: [
-//         {
-//           value: String,
-//         },
-//       ],
-//       runs: [
-//         {
-//           value: String,
-//         },
-//       ],
-//       wickets: [
-//         {
-//           value: String,
-//         },
-//       ],
-//       ranking: [
-//         {
-//           value: Number,
-//           Dated: Date
-//         },
-//       ],
-//     },
-//   },
-// });
-
 const playerSchema = new mongoose.Schema({
   name: String,
   role: String,
@@ -186,68 +131,6 @@ const compressImage = async (imageBuffer) => {
     return null; // Return null if there's an error with image processing
   }
 };
-
-// Get All
-
-// app.get("/api/players", async (req, res) => {
-//   try {
-//     const players = await Player.find(
-//       {},
-//       {
-//         _id: 1,
-//         name: 1,
-//         birthplace: 1,
-//         born: 1,
-//         role: 1,
-//         battingstyle: 1,
-//         bowlingstyle: 1,
-//         debut: 1,
-//         image: 1,
-//         scores: 1,
-//       }
-//     );
-
-//     // Calculate average runs for each player
-//     const playersWithAverages = players.map(player => {
-//       const totalMatches = player.scores.runs.length;
-//       const totalRuns = player.scores.runs.reduce((acc, score) => acc + parseInt(score.value, 10), 0);
-//       const averageRuns = totalMatches > 0 ? totalRuns / totalMatches : 0;
-
-//       return {
-//         player,
-//         averageRuns
-//       };
-//     });
-
-//     // Sort players based on average runs in descending order
-//     playersWithAverages.sort((a, b) => b.averageRuns - a.averageRuns);
-
-//     // Assign rankings based on sorted position
-//     for (let i = 0; i < playersWithAverages.length; i++) {
-//       playersWithAverages[i].player.scores.career.ranking[0].value = i + 1;
-//       await playersWithAverages[i].player.save();
-//     }
-
-//     // Map players and compress image if available
-//     const playersWithCompressedImages = await Promise.all(
-//       playersWithAverages.map(async ({ player }) => {
-//         if (player.image) {
-//           const compressedImage = await compressImage(
-//             Buffer.from(player.image, "base64")
-//           );
-//           return { ...player.toObject(), image: compressedImage };
-//         } else {
-//           return { ...player.toObject(), image: null }; // Handle case where image is null or empty
-//         }
-//       })
-//     );
-
-//     res.status(200).json(playersWithCompressedImages);
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ message: "Internal server error" });
-//   }
-// });
 
 app.get("/api/players", async (req, res) => {
   try {
@@ -625,6 +508,97 @@ function updateLastFour(player, newRuns) {
     player.scores.lastfour = player.scores.lastfour.slice(-4); // Keep only the last 4 entries
   }
 }
+//Latest Ranking Based on Last Match
+
+app.get('/api/mom/latest', async (req, res) => {
+  try {
+    // Find the latest date of match
+    const latestMatch = await Player.aggregate([
+      { $unwind: '$scores.runs' },
+      { $sort: { 'scores.runs.DateOfMatch': -1 } },
+      { $limit: 1 }
+    ]);
+
+    if (latestMatch.length === 0) {
+      return res.status(404).json({ message: 'No matches found' });
+    }
+
+    const latestDate = latestMatch[0].scores.runs.DateOfMatch;
+
+    // Find players with scores on the latest date
+    const players = await Player.find({
+      $or: [
+        { 'scores.runs.DateOfMatch': latestDate },
+        { 'scores.wickets.DateOfMatch': latestDate }
+      ]
+    });
+
+    let motmPlayer = null;
+    let highestScore = 0;
+
+    players.forEach(player => {
+      let playerScore = 0;
+      let runsOnLatestMatch = 0;
+      let wicketsOnLatestMatch = 0;
+      let ballsOnLatestMatch = 0;
+
+      // Calculate player score for runs and wickets on the latest match date
+      if (player.scores.runs && player.scores.runs.length > 0) {
+        player.scores.runs.forEach(run => {
+          if (run.DateOfMatch instanceof Date && run.DateOfMatch.getTime() === latestDate.getTime()) {
+            playerScore += parseInt(run.value, 10);
+            runsOnLatestMatch += parseInt(run.value, 10);
+          }
+        });
+      }
+
+      if (player.scores.wickets && player.scores.wickets.length > 0) {
+        player.scores.wickets.forEach(wicket => {
+          if (wicket.DateOfMatch instanceof Date && wicket.DateOfMatch.getTime() === latestDate.getTime()) {
+            playerScore += 10 * parseInt(wicket.value, 10);
+            wicketsOnLatestMatch += parseInt(wicket.value, 10);
+          }
+        });
+      }
+
+      // Calculate balls on the latest match date (if available in your schema)
+      if (player.scores.balls && player.scores.balls.length > 0) {
+        player.scores.balls.forEach(ball => {
+          if (ball.DateOfMatch instanceof Date && ball.DateOfMatch.getTime() === latestDate.getTime()) {
+            ballsOnLatestMatch += parseInt(ball.value, 10);
+          }
+        });
+      }
+
+      // Determine if this player has the highest score
+      if (playerScore > highestScore) {
+        highestScore = playerScore;
+        motmPlayer = {
+          ilayerId: player.playerId,
+          name: player.name,
+          role: player.role,
+          image: player.image || null,
+          latestMatchDate: latestDate,
+          score: {
+            runs: runsOnLatestMatch,
+            wickets: wicketsOnLatestMatch,
+            balls: ballsOnLatestMatch
+          }
+        };
+      }
+    });
+
+    if (!motmPlayer) {
+      return res.status(404).json({ message: 'No matches found on the latest date' });
+    }
+
+    res.status(200).json(motmPlayer);
+  } catch (error) {
+    console.error('Error fetching MOTM:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 //Man of The Match
 
 app.get('/api/mom/:date', async (req, res) => {
@@ -751,6 +725,11 @@ app.put("/api/update/:playerId", async (req, res) => {
   }
 });
 // Start server
-app.listen(port, () => {
+
+// app.listen(port, () => {
+//   console.log(`Server is running on port ${port}`);
+// });
+
+app.listen(port, '0.0.0.0', () => {
   console.log(`Server is running on port ${port}`);
 });
